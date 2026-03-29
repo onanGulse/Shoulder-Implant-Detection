@@ -1,0 +1,44 @@
+%% --- 1. IMAGE UPLOAD ---
+[file, path] = uigetfile({'*.png;*.jpg;*.jpeg;*.bmp'}, 'Select X-ray for Analysis');
+if isequal(file,0), return; end 
+img = imread(fullfile(path, file));
+
+%% --- 2. AI PROCESSING ---
+if size(img, 3) == 3, grayImg = rgb2gray(img); else, grayImg = img; end
+imgResized = imresize(grayImg, [256 256]);
+[C, scores] = semanticseg(imgResized, MasterImplantAI);
+if ndims(scores) == 3, prob = scores(:,:,2); else, prob = double(C == 'Implant'); end
+
+%% --- 3. ULTRA-PRECISION DETECTION (No More Ghost Areas) ---
+% 1. Eşiği çok yükseltiyoruz (Sadece en parlak metal alanlar kalsın)
+binaryMask = prob > (max(prob(:)) * 0.75); 
+
+% 2. Birbirine çok yakın parçaları birleştir ama dışarı taşma
+binaryMask = imclose(binaryMask, strel('disk', 5));
+
+% 3. En büyük alanı bul (Sahte kemik sinyallerini eler)
+stats = regionprops(binaryMask, 'Area', 'PixelIdxList', 'ConvexHull');
+if ~isempty(stats)
+    [~, largestIdx] = max([stats.Area]);
+    % SADECE en büyük objenin sınırlarını al
+    finalPoly = stats(largestIdx).ConvexHull;
+else
+    finalPoly = [];
+end
+
+%% --- 4. THE CLEAN OUTPUT ---
+close all;
+figure('Color', 'w', 'Name', 'Final Prosthesis Detection');
+imshow(imgResized); hold on;
+
+if ~isempty(finalPoly)
+    % Temiz Mavi Poligon ve Noktalar
+    plot(finalPoly(:,1), finalPoly(:,2), 'b', 'LineWidth', 2.5); 
+    plot(finalPoly(:,1), finalPoly(:,2), 'bo', 'MarkerFaceColor', 'b', 'MarkerSize', 5);
+    
+    text(mean(finalPoly(:,1)), min(finalPoly(:,2))-15, 'PROSTHESIS IDENTIFIED', ...
+        'Color', 'blue', 'FontSize', 11, 'FontWeight', 'bold', 'HorizontalAlignment', 'center');
+    title('ANALYSIS COMPLETE: POSITIVE', 'FontSize', 14, 'Color', 'b');
+else
+    title('ANALYSIS COMPLETE: NEGATIVE', 'FontSize', 14, 'Color', 'r');
+end
